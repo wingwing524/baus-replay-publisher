@@ -1,0 +1,43 @@
+name: GitHub Actions safety guard
+
+on:
+  push:
+    paths:
+      - ".github/workflows/**"
+  pull_request:
+    paths:
+      - ".github/workflows/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  enforce-timeouts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reject unbounded runner jobs
+        shell: ruby {0}
+        run: |
+          require "yaml"
+
+          violations = []
+          Dir[".github/workflows/*.{yml,yaml}"].sort.each do |path|
+            workflow = YAML.safe_load(File.read(path), aliases: true) || {}
+            (workflow["jobs"] || {}).each do |job_name, job|
+              next unless job.is_a?(Hash) && job.key?("runs-on")
+
+              timeout = job["timeout-minutes"]
+              violations << "#{path}:#{job_name} has no timeout-minutes" if timeout.nil?
+              violations << "#{path}:#{job_name} exceeds 45 minutes" if timeout.to_i > 45
+            end
+          end
+
+          abort violations.join("\n") unless violations.empty?
+          puts "All runner jobs have a timeout of 45 minutes or less."
